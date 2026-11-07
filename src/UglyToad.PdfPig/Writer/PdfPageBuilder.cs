@@ -119,7 +119,7 @@
         /// <summary>
         /// The number of this page, 1-indexed.
         /// </summary>
-        public int PageNumber { get; }
+        public int PageNumber { get; internal set; }
 
         /// <summary>
         /// The current size of the page.
@@ -182,6 +182,108 @@
 
             currentStream = writeableContentStream;
             contentStreams.Add(currentStream);
+        }
+
+        internal PdfPageBuilder Duplicate(int number, IPdfStreamWriter writer)
+        {
+            var clonedStreams = contentStreams
+                .Select(x => x is DefaultContentStream defaultStream
+                    ? (IPageContentStream)new DefaultContentStream(new List<IGraphicsStateOperation>(defaultStream.Operations))
+                    : ((CopiedContentStream)x).Duplicate(writer))
+                .ToList();
+
+            return new PdfPageBuilder(
+                number,
+                documentBuilder,
+                clonedStreams,
+                contentStreams.IndexOf(currentStream),
+                CloneDictionary(pageDictionary),
+                links.Select(x => (CloneDictionaryToken(x.token), x.action)).ToList(),
+                PageSize,
+                rotation,
+                nextFontId,
+                textSequence,
+                documentFonts);
+        }
+
+        private void InitializeNameConflictSolvers()
+        {
+            if (!pageDictionary.TryGetValue(NameToken.Resources, out var resourcesToken) ||
+                resourcesToken is not DictionaryToken resources)
+            {
+                return;
+            }
+
+            if (resources.Data.TryGetValue("XObject", out var xobjectsToken) && xobjectsToken is DictionaryToken xobjects)
+            {
+                foreach (var name in xobjects.Data.Keys)
+                {
+                    xobjectsNames.FixName(name);
+                }
+            }
+
+            if (resources.Data.TryGetValue("ExtGState", out var graphicsStatesToken) && graphicsStatesToken is DictionaryToken graphicsStates)
+            {
+                foreach (var name in graphicsStates.Data.Keys)
+                {
+                    gStateNames.FixName(name);
+                }
+            }
+        }
+
+        private static Dictionary<NameToken, IToken> CloneDictionary(IReadOnlyDictionary<NameToken, IToken> source)
+        {
+            return source.ToDictionary(x => x.Key, x => CloneToken(x.Value));
+        }
+
+        private static DictionaryToken CloneDictionaryToken(DictionaryToken source)
+        {
+            return new DictionaryToken(source.Data.ToDictionary(
+                x => NameToken.Create(x.Key),
+                x => CloneToken(x.Value)));
+        }
+
+        private static IToken CloneToken(IToken token)
+        {
+            return token switch
+            {
+                DictionaryToken dictionary => CloneDictionaryToken(dictionary),
+                ArrayToken array => new ArrayToken(array.Data.Select(CloneToken).ToArray()),
+                StreamToken stream => new StreamToken(CloneDictionaryToken(stream.StreamDictionary), stream.Data.ToArray()),
+                _ => token
+            };
+        }
+
+        private PdfPageBuilder(
+            int number,
+            PdfDocumentBuilder documentBuilder,
+            List<IPageContentStream> streams,
+            int currentStreamIndex,
+            Dictionary<NameToken, IToken> pageDict,
+            List<(DictionaryToken token, PdfAction action)> copiedLinks,
+            PdfRectangle pageSize,
+            int? pageRotation,
+            int fontId,
+            int currentTextSequence,
+            IReadOnlyDictionary<Guid, NameToken> copiedDocumentFonts)
+        {
+            this.documentBuilder = documentBuilder;
+            PageNumber = number;
+            contentStreams = streams;
+            currentStream = streams[currentStreamIndex];
+            pageDictionary = pageDict;
+            links = copiedLinks;
+            PageSize = pageSize;
+            rotation = pageRotation;
+            nextFontId = fontId;
+            textSequence = currentTextSequence;
+
+            foreach (var font in copiedDocumentFonts)
+            {
+                documentFonts.Add(font.Key, font.Value);
+            }
+
+            InitializeNameConflictSolvers();
         }
 
         /// <summary>
@@ -1308,6 +1410,7 @@
         internal class CopiedContentStream : IPageContentStream
         {
             private readonly IndirectReferenceToken token;
+            private readonly byte[]? decodedContent;
 
             public bool ReadOnly => true;
 
@@ -1317,10 +1420,26 @@
 
             public CopiedContentStream(
                 IndirectReferenceToken indirectReferenceToken,
-                TransformationMatrix? globalTransform)
+                TransformationMatrix? globalTransform,
+                byte[]? decodedContent = null)
             {
                 GlobalTransform = globalTransform;
                 token = indirectReferenceToken;
+                this.decodedContent = decodedContent;
+            }
+
+            public CopiedContentStream Duplicate(IPdfStreamWriter writer)
+            {
+                if (decodedContent is null)
+                {
+                    throw new NotSupportedException("A copied page cannot be duplicated because one of its content streams could not be decoded.");
+                }
+
+                var copiedContent = decodedContent.ToArray();
+                return new CopiedContentStream(
+                    writer.WriteToken(DataCompressor.CompressToStream(copiedContent)),
+                    GlobalTransform,
+                    copiedContent);
             }
 
             public IndirectReferenceToken Write(IPdfStreamWriter writer)

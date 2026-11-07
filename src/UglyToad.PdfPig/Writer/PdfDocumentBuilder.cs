@@ -405,6 +405,18 @@ namespace UglyToad.PdfPig.Writer
         /// <returns>A builder for editing the new page.</returns>
         public PdfPageBuilder AddPage(double width, double height)
         {
+            return AddPage(width, height, pages.Count + 1);
+        }
+
+        /// <summary>
+        /// Adds a new blank page at the specified 1-indexed position.
+        /// </summary>
+        /// <param name="width">The width of the page in points.</param>
+        /// <param name="height">The height of the page in points.</param>
+        /// <param name="pageNumber">The position where the page will be inserted, from 1 to the number of pages plus 1.</param>
+        /// <returns>A builder for editing the new page.</returns>
+        public PdfPageBuilder AddPage(double width, double height, int pageNumber)
+        {
             if (width < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(width), $"Width cannot be negative, got: {width}.");
@@ -415,22 +427,10 @@ namespace UglyToad.PdfPig.Writer
                 throw new ArgumentOutOfRangeException(nameof(height), $"Height cannot be negative, got: {height}.");
             }
 
-            PdfPageBuilder? builder = null;
-            for (var i = 0; i < pages.Count; i++)
-            {
-                if (!pages.ContainsKey(i + 1))
-                {
-                    builder = new PdfPageBuilder(i + 1, this);
-                    break;
-                }
-            }
-
-            builder ??= new PdfPageBuilder(pages.Count + 1, this);
-
+            ValidatePageInsertionNumber(pageNumber);
+            var builder = new PdfPageBuilder(pages.Count + 1, this);
             builder.PageSize = new PdfRectangle(0, 0, width, height);
-            pages[builder.PageNumber] = builder;
-
-            return builder;
+            return InsertPage(builder, pageNumber);
         }
 
         /// <summary>
@@ -440,6 +440,18 @@ namespace UglyToad.PdfPig.Writer
         /// <param name="isPortrait">Whether the page is in portait or landscape orientation.</param>
         /// <returns>A builder for editing the new page.</returns>
         public PdfPageBuilder AddPage(PageSize size, bool isPortrait = true)
+        {
+            return AddPage(size, pages.Count + 1, isPortrait);
+        }
+
+        /// <summary>
+        /// Adds a new blank page at the specified 1-indexed position.
+        /// </summary>
+        /// <param name="size">The size of the page to add.</param>
+        /// <param name="pageNumber">The position where the page will be inserted, from 1 to the number of pages plus 1.</param>
+        /// <param name="isPortrait">Whether the page is in portrait or landscape orientation.</param>
+        /// <returns>A builder for editing the new page.</returns>
+        public PdfPageBuilder AddPage(PageSize size, int pageNumber, bool isPortrait = true)
         {
             if (size == PageSize.Custom)
             {
@@ -454,10 +466,134 @@ namespace UglyToad.PdfPig.Writer
 
             if (!isPortrait)
             {
-                return AddPage(rectangle.Height, rectangle.Width);
+                return AddPage(rectangle.Height, rectangle.Width, pageNumber);
             }
 
-            return AddPage(rectangle.Width, rectangle.Height);
+            return AddPage(rectangle.Width, rectangle.Height, pageNumber);
+        }
+
+        /// <summary>
+        /// Adds every page from the specified document to this builder.
+        /// </summary>
+        /// <param name="document">The source document whose pages will be copied.</param>
+        public void AddPages(PdfDocument document)
+        {
+            AddPages(document, pages.Count + 1);
+        }
+
+        /// <summary>
+        /// Adds every page from the specified document starting at the specified 1-indexed position.
+        /// </summary>
+        /// <param name="document">The source document whose pages will be copied.</param>
+        /// <param name="pageNumber">The position where the first page will be inserted, from 1 to the number of pages plus 1.</param>
+        public void AddPages(PdfDocument document, int pageNumber)
+        {
+            if (document is null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
+
+            ValidatePageInsertionNumber(pageNumber);
+            var insertAtPageNumber = pageNumber;
+            for (var sourcePageNumber = 1; sourcePageNumber <= document.NumberOfPages; sourcePageNumber++)
+            {
+                AddPage(document, sourcePageNumber, insertAtPageNumber);
+                insertAtPageNumber++;
+            }
+        }
+
+        /// <summary>
+        /// Removes a page from this builder and renumbers the remaining pages.
+        /// </summary>
+        /// <param name="pageNumber">The 1-indexed number of the page to remove.</param>
+        public void RemovePage(int pageNumber)
+        {
+            ValidatePageNumber(pageNumber);
+            pages.Remove(pageNumber);
+            RenumberPages(pages.OrderBy(x => x.Key).Select(x => x.Value).ToList());
+        }
+
+        /// <summary>
+        /// Moves a page to a new position in this builder.
+        /// </summary>
+        /// <param name="pageNumber">The current 1-indexed number of the page to move.</param>
+        /// <param name="newPageNumber">The 1-indexed position to move the page to.</param>
+        public void MovePage(int pageNumber, int newPageNumber)
+        {
+            ValidatePageNumber(pageNumber);
+            ValidatePageNumber(newPageNumber);
+
+            if (pageNumber == newPageNumber)
+            {
+                return;
+            }
+
+            var orderedPages = pages.OrderBy(x => x.Key).Select(x => x.Value).ToList();
+            var page = orderedPages[pageNumber - 1];
+            orderedPages.RemoveAt(pageNumber - 1);
+            orderedPages.Insert(newPageNumber - 1, page);
+            RenumberPages(orderedPages);
+        }
+
+        /// <summary>
+        /// Duplicates a page in this builder and appends the copy.
+        /// </summary>
+        /// <param name="pageNumber">The 1-indexed number of the page to duplicate.</param>
+        /// <returns>A builder for editing the duplicated page.</returns>
+        public PdfPageBuilder DuplicatePage(int pageNumber)
+        {
+            return DuplicatePage(pageNumber, pages.Count + 1);
+        }
+
+        /// <summary>
+        /// Duplicates a page in this builder and inserts the copy at the specified position.
+        /// </summary>
+        /// <param name="pageNumber">The 1-indexed number of the page to duplicate.</param>
+        /// <param name="insertAtPageNumber">The 1-indexed position for the copy, from 1 to the number of pages plus 1.</param>
+        /// <returns>A builder for editing the duplicated page.</returns>
+        public PdfPageBuilder DuplicatePage(int pageNumber, int insertAtPageNumber)
+        {
+            ValidatePageNumber(pageNumber);
+            ValidatePageInsertionNumber(insertAtPageNumber);
+
+            var duplicate = pages[pageNumber].Duplicate(pages.Count + 1, context);
+            return InsertPage(duplicate, insertAtPageNumber);
+        }
+
+        private void ValidatePageNumber(int pageNumber)
+        {
+            if (pageNumber < 1 || pageNumber > pages.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(pageNumber), pageNumber,
+                    $"Page number must be between 1 and {pages.Count}.");
+            }
+        }
+
+        private void ValidatePageInsertionNumber(int pageNumber)
+        {
+            if (pageNumber < 1 || pageNumber > pages.Count + 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(pageNumber), pageNumber,
+                    $"Insertion position must be between 1 and {pages.Count + 1}.");
+            }
+        }
+
+        private PdfPageBuilder InsertPage(PdfPageBuilder page, int pageNumber)
+        {
+            var orderedPages = pages.OrderBy(x => x.Key).Select(x => x.Value).ToList();
+            orderedPages.Insert(pageNumber - 1, page);
+            RenumberPages(orderedPages);
+            return page;
+        }
+
+        private void RenumberPages(IReadOnlyList<PdfPageBuilder> orderedPages)
+        {
+            pages.Clear();
+            for (var i = 0; i < orderedPages.Count; i++)
+            {
+                orderedPages[i].PageNumber = i + 1;
+                pages.Add(i + 1, orderedPages[i]);
+            }
         }
 
         internal IToken CopyToken(IPdfTokenScanner source, IToken token)
@@ -498,7 +634,7 @@ namespace UglyToad.PdfPig.Writer
         private readonly HashSet<string> fieldNames = new HashSet<string>();
 
         /// <summary>
-        /// Add a new page with the specified size, this page will be included in the output when <see cref="Build"/> is called.
+        /// Add an existing page from the specified document, this page will be included in the output when <see cref="Build"/> is called.
         /// </summary>
         /// <param name="document">Source document.</param>
         /// <param name="pageNumber">Page to copy.</param>
@@ -509,7 +645,7 @@ namespace UglyToad.PdfPig.Writer
         }
 
         /// <summary>
-        /// Add a new page with the specified size, this page will be included in the output when <see cref="Build"/> is called.
+        /// Add an existing page from the specified document, this page will be included in the output when <see cref="Build"/> is called.
         /// </summary>
         /// <param name="document">Source document.</param>
         /// <param name="pageNumber">Page to copy.</param>
@@ -517,6 +653,33 @@ namespace UglyToad.PdfPig.Writer
         /// <returns>A builder for editing the page.</returns>
         public PdfPageBuilder AddPage(PdfDocument document, int pageNumber, AddPageOptions options)
         {
+            return AddPage(document, pageNumber, pages.Count + 1, options);
+        }
+
+        /// <summary>
+        /// Adds an existing page from the specified document at a specific position.
+        /// </summary>
+        /// <param name="document">Source document.</param>
+        /// <param name="pageNumber">Page to copy.</param>
+        /// <param name="insertAtPageNumber">The 1-indexed position where the copied page will be inserted.</param>
+        /// <returns>A builder for editing the page.</returns>
+        public PdfPageBuilder AddPage(PdfDocument document, int pageNumber, int insertAtPageNumber)
+        {
+            return AddPage(document, pageNumber, insertAtPageNumber, new AddPageOptions());
+        }
+
+        /// <summary>
+        /// Adds an existing page from the specified document at a specific position.
+        /// </summary>
+        /// <param name="document">Source document.</param>
+        /// <param name="pageNumber">Page to copy.</param>
+        /// <param name="insertAtPageNumber">The 1-indexed position where the copied page will be inserted.</param>
+        /// <param name="options">Control how copying for the page occurs.</param>
+        /// <returns>A builder for editing the page.</returns>
+        public PdfPageBuilder AddPage(PdfDocument document, int pageNumber, int insertAtPageNumber, AddPageOptions options)
+        {
+            ValidatePageInsertionNumber(insertAtPageNumber);
+
             if (!existingCopies.TryGetValue(document.Structure.TokenScanner, out var refs))
             {
                 refs = new Dictionary<IndirectReference, IndirectReferenceToken>();
@@ -589,14 +752,15 @@ namespace UglyToad.PdfPig.Writer
                 {
                     // Detect any globally applied transforms to the graphics state from the content stream.
                     TransformationMatrix? globalTransform = null;
+                    byte[]? decodedContent = null;
 
                     try
                     {
                         // If we don't manage to do this it's not the end of the world.
                         if (DirectObjectFinder.TryGet<StreamToken>(indirectReferenceToken, document.Structure.TokenScanner, out var contentStream))
                         {
-                            var contentBytes = contentStream.Decode(document.Structure.FilterProvider);
-                            var parsedOperations = pcp.Parse(0, new MemoryInputBytes(contentBytes), new NoOpLog());
+                            decodedContent = contentStream.Decode(document.Structure.FilterProvider).ToArray();
+                            var parsedOperations = pcp.Parse(0, new MemoryInputBytes(decodedContent), new NoOpLog());
                             globalTransform = PdfContentTransformationReader.GetGlobalTransform(parsedOperations, ref stackDepth);
                         }
                     }
@@ -611,7 +775,7 @@ namespace UglyToad.PdfPig.Writer
                         document.Structure.TokenScanner,
                         refs);
 
-                    streams.Add(new PdfPageBuilder.CopiedContentStream(updatedIndirect, globalTransform));
+                    streams.Add(new PdfPageBuilder.CopiedContentStream(updatedIndirect, globalTransform, decodedContent));
                 }
 
                 context.AttemptDeduplication = prev;
@@ -692,8 +856,7 @@ namespace UglyToad.PdfPig.Writer
             copiedPageDict[NameToken.Resources] = new DictionaryToken(resources);
 
             var builder = new PdfPageBuilder(pages.Count + 1, this, streams, copiedPageDict, links);
-            pages[builder.PageNumber] = builder;
-            return builder;
+            return InsertPage(builder, insertAtPageNumber);
 
             void CopyResourceDict(IToken token, Dictionary<NameToken, IToken> destinationDict)
             {

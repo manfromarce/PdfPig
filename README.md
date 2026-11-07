@@ -75,6 +75,26 @@ Document creation supports very limited changes to existing PDF documents. Howev
 - Copying or changing annotations, metadata or document structure data
 - Adding or removing text with existing fonts
 
+#### Organizing pages
+
+`PdfDocumentBuilder` can add blank pages or copy pages from an existing `PdfDocument` at a specific position. It can also add all pages from another document, remove, move, or duplicate pages:
+
+```cs
+using var source = PdfDocument.Open(@"C:\Documents\source.pdf");
+using var builder = new PdfDocumentBuilder();
+
+builder.AddPage(PageSize.A4);          // Add a blank page at the end.
+builder.AddPage(source, 1, 1);          // Insert source page 1 at the beginning.
+builder.AddPages(source, 2);            // Insert all source pages starting at page 2.
+builder.DuplicatePage(1);               // Duplicate page 1 at the end.
+builder.MovePage(3, 1);                 // Move page 3 to the beginning.
+builder.RemovePage(2);                  // Remove page 2.
+
+byte[] organizedPdf = builder.Build();
+```
+
+Page numbers and insertion positions are 1-based. An insertion position of `Pages.Count + 1` appends the page. `DuplicatePage(pageNumber, insertAtPageNumber)` can be used to duplicate at a specific position.
+
 ### Advanced Document Extraction
 In this example a more advanced document extraction is performed. `PdfDocumentBuilder` is used to create a copy of the pdf with debug information (bounding boxes and reading order) added.
 

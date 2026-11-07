@@ -145,6 +145,85 @@
         }
 
         [Fact]
+        public void CanAddAllPagesRemovePageAndReorderPages()
+        {
+            byte[] sourceBytes;
+            using (var sourceBuilder = new PdfDocumentBuilder())
+            {
+                sourceBuilder.AddPage(100, 200);
+                sourceBuilder.AddPage(200, 300);
+                sourceBuilder.AddPage(300, 400);
+                sourceBytes = sourceBuilder.Build();
+            }
+
+            using var source = PdfDocument.Open(sourceBytes, ParsingOptions.LenientParsingOff);
+            using var builder = new PdfDocumentBuilder();
+            builder.AddPage(50, 60);
+            builder.AddPages(source, 1);
+            var insertedBlankPage = builder.AddPage(400, 500, 2);
+            var insertedExistingPage = builder.AddPage(source, 1, 4);
+
+            Assert.Equal(6, builder.Pages.Count);
+            Assert.Same(insertedBlankPage, builder.Pages[2]);
+            Assert.Same(insertedExistingPage, builder.Pages[4]);
+
+            builder.RemovePage(2);
+            Assert.Equal(5, builder.Pages.Count);
+            Assert.Equal(new[] { 1, 2, 3, 4, 5 }, builder.Pages.Keys);
+            Assert.DoesNotContain(insertedBlankPage, builder.Pages.Values);
+
+            var movedPage = builder.Pages[4];
+            builder.MovePage(4, 3);
+            Assert.Same(movedPage, builder.Pages[3]);
+            Assert.Equal(3, movedPage.PageNumber);
+
+            Assert.Equal(5, builder.Pages[5].PageNumber);
+
+            var result = builder.Build();
+            using var output = PdfDocument.Open(result, ParsingOptions.LenientParsingOff);
+            Assert.Equal(5, output.NumberOfPages);
+            Assert.Equal((100, 200), (output.GetPage(1).Width, output.GetPage(1).Height));
+            Assert.Equal((200, 300), (output.GetPage(2).Width, output.GetPage(2).Height));
+            Assert.Equal((300, 400), (output.GetPage(3).Width, output.GetPage(3).Height));
+            Assert.Equal((100, 200), (output.GetPage(4).Width, output.GetPage(4).Height));
+            Assert.Equal((50, 60), (output.GetPage(5).Width, output.GetPage(5).Height));
+        }
+
+        [Fact]
+        public void CanDuplicateBuilderPageAndEditTheCopyIndependently()
+        {
+            byte[] sourceBytes;
+            using (var sourceBuilder = new PdfDocumentBuilder())
+            {
+                var page = sourceBuilder.AddPage(100, 200);
+                page.DrawLine(new PdfPoint(10, 10), new PdfPoint(30, 30));
+                sourceBytes = sourceBuilder.Build();
+            }
+
+            using var source = PdfDocument.Open(sourceBytes, ParsingOptions.LenientParsingOff);
+            using var builder = new PdfDocumentBuilder();
+            builder.AddPage(source, 1);
+
+            var duplicate = builder.DuplicatePage(1, 1);
+            duplicate.DrawLine(new PdfPoint(40, 40), new PdfPoint(60, 60));
+            var duplicateOfDuplicate = builder.DuplicatePage(1);
+
+            Assert.Equal(3, builder.Pages.Count);
+            Assert.Same(duplicate, builder.Pages[1]);
+            Assert.Equal(1, duplicate.PageNumber);
+            Assert.Equal(2, builder.Pages[2].PageNumber);
+            Assert.Same(duplicateOfDuplicate, builder.Pages[3]);
+
+            var result = builder.Build();
+            using var output = PdfDocument.Open(result, ParsingOptions.LenientParsingOff);
+            Assert.Equal(3, output.NumberOfPages);
+            Assert.Equal(2, output.GetPage(1).Paths.Count);
+            Assert.Single(output.GetPage(2).Paths);
+            Assert.Equal(2, output.GetPage(3).Paths.Count);
+            Assert.All(output.GetPages(), page => Assert.Equal((100, 200), (page.Width, page.Height)));
+        }
+
+        [Fact]
         public void AddPageUsesInheritedResourcesWhenPageHasNone()
         {
             var source = BuildRawPdf(

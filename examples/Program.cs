@@ -75,6 +75,10 @@
                 {12,
                     ("Generate PDF/A-3 document with an embedded file",
                     () => GenerateDocumentWithEmbeddedFile.Run(Path.Combine(filesDirectory, "..", "..", "Fonts", "TrueType", "Roboto-Regular.ttf")))
+                },
+                {13,
+                    ("Organize PDF pages",
+                    () => OrganizePdfPages.Run(Path.Combine(filesDirectory, "Two Page Text Only - from libre office.pdf")))
                 }
             };
 
